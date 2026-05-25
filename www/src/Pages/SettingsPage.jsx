@@ -21,6 +21,8 @@ import { hexToInt } from '../Services/Utilities';
 import { InputModeDeviceType, PS4ControllerType } from '@proto/enums';
 
 import './SettingsPage.scss';
+import { INPUT_MODE_OPTIONS as INPUT_MODES } from '../Data/InputBootModes'
+import { useBootModeStore, useBootModeStoreActions } from '../Store/useBootModesStore';
 
 const SHA256 = (ascii) => {
 	function rightRotate(value, amount) {
@@ -322,6 +324,8 @@ const HOTKEY_ACTIONS = [
 	{ labelKey: 'hotkey-actions.r3-button', value: 20 },
 	{ labelKey: 'hotkey-actions.touchpad-button', value: 21 },
 	{ labelKey: 'hotkey-actions.reboot-default', value: 22 },
+	{ labelKey: 'hotkey-actions.reboot-webconfig', value: 86 },
+	{ labelKey: 'hotkey-actions.reboot-usb', value: 87 },
 	{ labelKey: 'hotkey-actions.save-config', value: 43 },
 	{ labelKey: 'hotkey-actions.b1-button', value: 23 },
 	{ labelKey: 'hotkey-actions.b2-button', value: 24 },
@@ -593,9 +597,13 @@ export default function SettingsPage() {
 	const fetchProfiles = useProfilesStore((state) => state.fetchProfiles);
 	const profiles = useProfilesStore((state) => state.profiles);
 
+	const { fetchBootModeOptions } = useBootModeStoreActions();
+	const gpioBootModeMappingEnabled = useBootModeStore((state) => state.enabled);
+
 	useEffect(() => {
 		fetchProfiles();
 		updatePeripherals();
+		fetchBootModeOptions();
 	}, []);
 
 	const [saveMessage, setSaveMessage] = useState('');
@@ -1782,61 +1790,71 @@ export default function SettingsPage() {
 												<Section
 													title={t('SettingsPage:boot-input-mode-label')}
 												>
-													<Row sm={3}>
-														{INPUT_MODES_BINDS.map((mode, index) => (
-															<Form.Group
-																className="mb-3 col-sm-6"
-																key={`input-mode-${index}`}
-															>
-																<Form.Label>
-																	{mode.value in currentButtonLabels
-																		? currentButtonLabels[mode.value]
-																		: mode.value}
-																</Form.Label>
-																<Col sm={10}>
-																	<Form.Select
-																		name={`inputMode${mode.value}`}
-																		className="form-select-sm"
-																		value={values[`inputMode${mode.value}`]}
-																		onChange={handleChange}
-																		isInvalid={errors[`inputMode${mode.value}`]}
+													{gpioBootModeMappingEnabled ? (
+														<p>
+															To use the new GPIO-based mapping, go to the{' '}
+															<NavLink to="/boot-mode-mapping">Boot Mode Configuration</NavLink>
+															{' '}page.
+														</p>
+													) : (
+														<div>
+															<Row sm={3}>
+																{INPUT_MODES_BINDS.map((mode, index) => (
+																	<Form.Group
+																		className="mb-3 col-sm-6"
+																		key={`input-mode-${index}`}
 																	>
-																		{translatedInputModeGroups.map((o, i) => (
-																			<optgroup
-																				label={o.label}
-																				key={`optgroup-${o.label}-${i}`}
+																		<Form.Label>
+																			{mode.value in currentButtonLabels
+																				? currentButtonLabels[mode.value]
+																				: mode.value}
+																		</Form.Label>
+																		<Col sm={10}>
+																			<Form.Select
+																				name={`inputMode${mode.value}`}
+																				className="form-select-sm"
+																				value={values[`inputMode${mode.value}`]}
+																				onChange={handleChange}
+																				isInvalid={errors[`inputMode${mode.value}`]}
 																			>
-																				{translatedInputBootModes
-																					.filter(
-																						({ group }) => group == o.group,
-																					)
-																					.map((o, i) => (
-																						<option
-																							key={`button-inputMode-${mode.value
-																								.toString()
-																								.toLowerCase()}-option-${i}`}
-																							value={o.value}
-																							disabled={o.disabled}
-																						>
-																							{o.label}
-																							{o.disabled && o.reason != ''
-																								? ' (' + o.reason + ')'
-																								: ''}
-																						</option>
-																					))}
-																			</optgroup>
-																		))}
-																	</Form.Select>
-																	<Form.Control.Feedback type="invalid">
-																		{errors[`inputMode${mode.value}`]}
-																	</Form.Control.Feedback>
-																</Col>
-															</Form.Group>
-														))}
-													</Row>
-													<Button type="submit">
-														{t('Common:button-save-label')}
-													</Button>
+																				{translatedInputModeGroups.map((o, i) => (
+																					<optgroup
+																						label={o.label}
+																						key={`optgroup-${o.label}-${i}`}
+																					>
+																						{translatedInputBootModes
+																							.filter(
+																								({ group }) => group == o.group,
+																							)
+																							.map((o, i) => (
+																								<option
+																									key={`button-inputMode-${mode.value
+																										.toString()
+																										.toLowerCase()}-option-${i}`}
+																									value={o.value}
+																									disabled={o.disabled}
+																								>
+																									{o.label}
+																									{o.disabled && o.reason != ''
+																										? ' (' + o.reason + ')'
+																										: ''}
+																								</option>
+																							))}
+																					</optgroup>
+																				))}
+																			</Form.Select>
+																			<Form.Control.Feedback type="invalid">
+																				{errors[`inputMode${mode.value}`]}
+																			</Form.Control.Feedback>
+																		</Col>
+																	</Form.Group>
+																))}
+															</Row>
+															<Button type="submit">
+																{t('Common:button-save-label')}
+															</Button>
+														</div>
+													)}
 													{saveMessage ? (
 														<span className="alert">{saveMessage}</span>
 													) : null}

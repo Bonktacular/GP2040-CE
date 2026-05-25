@@ -1,3 +1,5 @@
+#include <optional>
+
 // GP2040 includes
 #include "gp2040.h"
 #include "helper.h"
@@ -51,6 +53,7 @@ static const uint32_t REBOOT_HOTKEY_HOLD_TIME_MS = 4000;
 const static uint32_t rebootDelayMs = 500;
 static absolute_time_t rebootDelayTimeout = nil_time;
 
+
 void GP2040::setup() {
 	Storage::getInstance().init();
 
@@ -65,6 +68,19 @@ void GP2040::setup() {
 	Storage::getInstance().SetGamepad(gamepad);
 	Storage::getInstance().SetProcessedGamepad(processedGamepad);
 
+	BootModeOptions& bootModeOptions = Storage::getInstance().getBootModeOptions();
+	BootAction bootAction;
+
+	GamepadOptions& gamepadOptions = Storage::getInstance().getGamepadOptions();
+	uint32_t prevProfile = gamepadOptions.profileNumber;
+	bool profileChanged = false;
+
+	if (bootModeOptions.enabled) {
+		bootAction = getGpioMappedBootAction();
+		profileChanged = bootAction.profileNumber != prevProfile;
+		gamepadOptions.profileNumber = bootAction.profileNumber;
+	}
+
 	// Set pin mappings for all GPIO functions
 	Storage::getInstance().setFunctionalPinMappings();
 
@@ -76,12 +92,9 @@ void GP2040::setup() {
 	// Setup Gamepad
 	gamepad->setup();
 
-	// Initialize last reinit profile to current so we don't reinit on first loop
-	gamepad->lastReinitProfileNumber = Storage::getInstance().getGamepadOptions().profileNumber;
-
 	// now we can load the latest configured profile, which will map the
 	// new set of GPIOs to use...
-	this->initializeStandardGpio();
+  this->initializeStandardGpio();
 
 	const GamepadOptions& gamepadOptions = Storage::getInstance().getGamepadOptions();
 
@@ -187,14 +200,19 @@ void GP2040::setup() {
 			break;
 	}
 
+	InputMode inputMode = bootAction.inputMode;
+	uint32_t profile = bootAction.profileNumber;
+
 	// Setup USB Driver
 	DriverManager::getInstance().setup(inputMode);
 
-	// save to match user expectations on choosing mode at boot, and this is
-	// before USB host will be used so we can force it to ignore the check
-	if (inputMode != INPUT_MODE_CONFIG && inputMode != gamepad->getOptions().inputMode) {
-		gamepad->setInputMode(inputMode);
-		Storage::getInstance().save(true);
+	if (inputMode != INPUT_MODE_CONFIG) {
+		bool inputModeChanged = inputMode != gamepadOptions.inputMode;
+		if (inputModeChanged) gamepad->setInputMode(inputMode);
+
+		// save to match user expectations on choosing mode at boot, and this is
+		// before USB host will be used so we can force it to ignore the check
+		if (inputModeChanged || profileChanged) Storage::getInstance().save(true);
 	}
 
 	// register system event handlers
@@ -299,7 +317,7 @@ void GP2040::run() {
 	tud_init(TUD_OPT_RHPORT);
 
 	if (configMode == true ) {
-		rndis_init();
+		rndis_init(WEB_CONFIG_HOSTNAME);
 	}
 
 	while (1) { // LOOP
@@ -328,7 +346,7 @@ void GP2040::run() {
 		// Pre-Process add-ons for MPGS
 		addons.PreprocessAddons();
 
-		
+
 
 		gamepad->process(); // process through MPGS
 
@@ -396,38 +414,50 @@ void GP2040::getReinitGamepad(Gamepad * gamepad) {
 	}
 }
 
-GP2040::BootAction GP2040::getBootAction() {
+GP2040::BootAction GP2040::getButtonMappedBootAction() {
+	GamepadOptions& gamepadOptions = Storage::getInstance().getGamepadOptions();
+	// Initialized to the current mode and profile
+	BootAction bootAction = {
+		BootActionType::SET_INPUT_MODE,
+		gamepadOptions.inputMode,
+		gamepadOptions.profileNumber
+	};
+
 	switch (System::takeBootMode()) {
-		case System::BootMode::GAMEPAD: return BootAction::NONE;
-		case System::BootMode::WEBCONFIG: return BootAction::ENTER_WEBCONFIG_MODE;
-		case System::BootMode::USB: return BootAction::ENTER_USB_MODE;
+		case System::BootMode::GAMEPAD:
+			return bootAction;
+		case System::BootMode::WEBCONFIG:
+			bootAction.inputMode = InputMode::INPUT_MODE_CONFIG;
+			return bootAction;
+		case System::BootMode::USB:
+			bootAction.type = BootActionType::ENTER_USB_MODE;
+			return bootAction;
 		case System::BootMode::DEFAULT:
-			{
-				// Determine boot action based on gamepad state during boot
-				Gamepad * gamepad = Storage::getInstance().GetGamepad();
-				Gamepad * processedGamepad = Storage::getInstance().GetProcessedGamepad();
+			break;
+	}
+	// Determine boot action based on gamepad state during boot
+	Gamepad * gamepad = Storage::getInstance().GetGamepad();
+	Gamepad * processedGamepad = Storage::getInstance().GetProcessedGamepad();
 
-				debounceGpioGetAll();
-				gamepad->read();
+	debounceGpioGetAll();
+	gamepad->read();
 
-				// Pre-Process add-ons for MPGS
-				addons.PreprocessAddons();
+	// Pre-Process add-ons for MPGS
+	addons.PreprocessAddons();
 
-				gamepad->process(); // process through MPGS
+	gamepad->process(); // process through MPGS
 
-				// Process for add-ons
-				addons.ProcessAddons();
+	// Process for add-ons
+	addons.ProcessAddons();
 
-				// Copy Processed Gamepad for Core1 (race condition otherwise)
-				memcpy(&processedGamepad->state, &gamepad->state, sizeof(GamepadState));
+	// Copy Processed Gamepad for Core1 (race condition otherwise)
+	memcpy(&processedGamepad->state, &gamepad->state, sizeof(GamepadState));
 
-                const ForcedSetupOptions& forcedSetupOptions = Storage::getInstance().getForcedSetupOptions();
-                bool modeSwitchLocked = forcedSetupOptions.mode == FORCED_SETUP_MODE_LOCK_MODE_SWITCH ||
-                                        forcedSetupOptions.mode == FORCED_SETUP_MODE_LOCK_BOTH;
+	const ForcedSetupOptions& forcedSetupOptions = Storage::getInstance().getForcedSetupOptions();
+	bool modeSwitchLocked = forcedSetupOptions.mode == FORCED_SETUP_MODE_LOCK_MODE_SWITCH ||
+													forcedSetupOptions.mode == FORCED_SETUP_MODE_LOCK_BOTH;
 
-                bool webConfigLocked  = forcedSetupOptions.mode == FORCED_SETUP_MODE_LOCK_WEB_CONFIG ||
-                                        forcedSetupOptions.mode == FORCED_SETUP_MODE_LOCK_BOTH;
-
+	bool webConfigLocked  = forcedSetupOptions.mode == FORCED_SETUP_MODE_LOCK_WEB_CONFIG ||
 				if (gamepad->pressedS1() && gamepad->pressedS2() && gamepad->pressedUp()) {
 					return BootAction::ENTER_USB_MODE;
 				} else if (!webConfigLocked && gamepad->pressedS2()) {
@@ -476,13 +506,27 @@ GP2040::BootAction GP2040::getBootAction() {
                         }
                     }
                 }
+                    }
+                }
 
-				break;
+	for (size_t i = 0; i < bootModeOptions.inputModeMappings_count; i++) {
+		InputModeMapping m = bootModeOptions.inputModeMappings[i];
+		if (m.pinMask < 0)
+			continue;
+		if (gpio == static_cast<Mask_t>(m.pinMask)) {
+			action.inputMode = static_cast<InputMode>(m.inputMode);
+			if (m.profileNumber > 0) {
+				action.profileNumber = m.profileNumber;
 			}
+			break;
+		}
 	}
 
-	return BootAction::NONE;
+	deinitializeStandardGpio();
+	return action;
 }
+
+
 
 GP2040::RebootHotkeys::RebootHotkeys() :
 	active(false),
